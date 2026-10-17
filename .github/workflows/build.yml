@@ -1,0 +1,496 @@
+name: Compiler les APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Creer les deux projets
+        run: |
+          mkdir -p emetteur
+          cat > emetteur/settings.gradle.kts <<'EOF_1'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "Emetteur"
+          include(":app")
+          EOF_1
+          mkdir -p emetteur
+          cat > emetteur/build.gradle.kts <<'EOF_2'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF_2
+          mkdir -p emetteur
+          cat > emetteur/gradle.properties <<'EOF_3'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          EOF_3
+          mkdir -p emetteur/app
+          cat > emetteur/app/build.gradle.kts <<'EOF_4'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.test.emetteur"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.test.emetteur"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          EOF_4
+          mkdir -p emetteur/app/src/main
+          cat > emetteur/app/src/main/AndroidManifest.xml <<'EOF_5'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="Test Emetteur"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+
+          </manifest>
+          EOF_5
+          mkdir -p emetteur/app/src/main/java/com/test/emetteur
+          cat > emetteur/app/src/main/java/com/test/emetteur/MainActivity.kt <<'EOF_6'
+          package com.test.emetteur
+
+          import android.app.Activity
+          import android.graphics.Color
+          import android.os.Bundle
+          import android.view.Gravity
+          import android.view.ViewGroup
+          import android.view.WindowManager
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import java.io.BufferedReader
+          import java.io.InputStreamReader
+          import java.io.PrintWriter
+          import java.net.Inet4Address
+          import java.net.NetworkInterface
+          import java.net.ServerSocket
+          import java.net.Socket
+          import java.util.Collections
+          import java.util.concurrent.CopyOnWriteArrayList
+
+          /**
+           * Émetteur : fait aussi office de serveur (port 8080).
+           * Les boutons + et - envoient "+1" ou "-1" aux récepteurs connectés.
+           * Le récepteur renvoie "v:<valeur>" pour que l'émetteur affiche le compteur.
+           */
+          class MainActivity : Activity() {
+
+              private val port = 8080
+              private val clients = CopyOnWriteArrayList<PrintWriter>()
+              private var serveur: ServerSocket? = null
+              private lateinit var info: TextView
+              private lateinit var etat: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+                  val racine = LinearLayout(this)
+                  racine.orientation = LinearLayout.VERTICAL
+                  racine.setBackgroundColor(Color.parseColor("#111111"))
+                  racine.setPadding(32, 32, 32, 32)
+                  racine.fitsSystemWindows = true
+
+                  info = TextView(this)
+                  info.setTextColor(Color.WHITE)
+                  info.textSize = 16f
+                  info.text = "Démarrage du serveur…"
+
+                  etat = TextView(this)
+                  etat.setTextColor(Color.LTGRAY)
+                  etat.textSize = 18f
+                  etat.text = "En attente d'un récepteur…"
+                  etat.setPadding(0, 16, 0, 0)
+
+                  racine.addView(info)
+                  racine.addView(etat)
+                  racine.addView(gros("+", "#2E9E4F", "+1"))
+                  racine.addView(gros("−", "#C0392B", "-1"))
+                  setContentView(racine)
+
+                  demarrerServeur()
+              }
+
+              private fun gros(texte: String, couleur: String, message: String): Button {
+                  val b = Button(this)
+                  b.text = texte
+                  b.textSize = 72f
+                  b.setTextColor(Color.WHITE)
+                  b.setBackgroundColor(Color.parseColor(couleur))
+                  b.gravity = Gravity.CENTER
+                  val p = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                  p.topMargin = 24
+                  b.layoutParams = p
+                  b.setOnClickListener { envoyer(message) }
+                  return b
+              }
+
+              private fun envoyer(message: String) {
+                  // Le réseau ne doit jamais être utilisé sur le thread principal
+                  Thread {
+                      for (c in clients) c.println(message)
+                  }.start()
+              }
+
+              private fun demarrerServeur() {
+                  Thread {
+                      try {
+                          val ss = ServerSocket(port)
+                          serveur = ss
+                          val adresses = adressesIp()
+                          runOnUiThread {
+                              info.text = "Adresse à saisir sur le récepteur :\n$adresses\n(port $port)"
+                          }
+                          while (!ss.isClosed) {
+                              val s = ss.accept()
+                              Thread { gererClient(s) }.start()
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread { info.text = "Erreur serveur : ${e.message}" }
+                      }
+                  }.start()
+              }
+
+              private fun gererClient(s: Socket) {
+                  val sortie = PrintWriter(s.getOutputStream(), true)
+                  clients.add(sortie)
+                  runOnUiThread { etat.text = "Récepteur connecté (${clients.size})" }
+                  try {
+                      val lecteur = BufferedReader(InputStreamReader(s.getInputStream()))
+                      while (true) {
+                          val ligne = lecteur.readLine() ?: break
+                          if (ligne.startsWith("v:")) {
+                              val v = ligne.substring(2)
+                              runOnUiThread { etat.text = "Compteur : $v" }
+                          }
+                      }
+                  } catch (e: Exception) {
+                      // connexion coupée
+                  } finally {
+                      clients.remove(sortie)
+                      try { s.close() } catch (e: Exception) { }
+                      runOnUiThread {
+                          etat.text = if (clients.isEmpty()) "En attente d'un récepteur…"
+                          else "Récepteur connecté (${clients.size})"
+                      }
+                  }
+              }
+
+              private fun adressesIp(): String {
+                  val liste = ArrayList<String>()
+                  try {
+                      for (ni in Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                          if (!ni.isUp || ni.isLoopback) continue
+                          for (a in Collections.list(ni.inetAddresses)) {
+                              if (a is Inet4Address && a.isSiteLocalAddress) {
+                                  liste.add(a.hostAddress ?: continue)
+                              }
+                          }
+                      }
+                  } catch (e: Exception) { }
+                  return if (liste.isEmpty()) "introuvable (vérifie le Wi-Fi)" else liste.joinToString("\n")
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  try { serveur?.close() } catch (e: Exception) { }
+              }
+          }
+          EOF_6
+          mkdir -p recepteur
+          cat > recepteur/settings.gradle.kts <<'EOF_7'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "Recepteur"
+          include(":app")
+          EOF_7
+          mkdir -p recepteur
+          cat > recepteur/build.gradle.kts <<'EOF_8'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF_8
+          mkdir -p recepteur
+          cat > recepteur/gradle.properties <<'EOF_9'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          EOF_9
+          mkdir -p recepteur/app
+          cat > recepteur/app/build.gradle.kts <<'EOF_10'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.test.recepteur"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.test.recepteur"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          EOF_10
+          mkdir -p recepteur/app/src/main
+          cat > recepteur/app/src/main/AndroidManifest.xml <<'EOF_11'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="Test Recepteur"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+
+          </manifest>
+          EOF_11
+          mkdir -p recepteur/app/src/main/java/com/test/recepteur
+          cat > recepteur/app/src/main/java/com/test/recepteur/MainActivity.kt <<'EOF_12'
+          package com.test.recepteur
+
+          import android.app.Activity
+          import android.graphics.Color
+          import android.os.Bundle
+          import android.text.InputType
+          import android.view.Gravity
+          import android.view.ViewGroup
+          import android.view.WindowManager
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import java.io.BufferedReader
+          import java.io.InputStreamReader
+          import java.io.PrintWriter
+          import java.net.InetSocketAddress
+          import java.net.Socket
+
+          /**
+           * Récepteur : se connecte à l'émetteur (adresse IP saisie, port 8080).
+           * Il reçoit "+1" / "-1", met à jour le compteur et renvoie "v:<valeur>".
+           */
+          class MainActivity : Activity() {
+
+              private val port = 8080
+              private var valeur = 0
+              private var socket: Socket? = null
+              private lateinit var champIp: EditText
+              private lateinit var bouton: Button
+              private lateinit var statut: TextView
+              private lateinit var compteur: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                  val prefs = getSharedPreferences("prefs", MODE_PRIVATE)
+
+                  val racine = LinearLayout(this)
+                  racine.orientation = LinearLayout.VERTICAL
+                  racine.setBackgroundColor(Color.parseColor("#111111"))
+                  racine.setPadding(32, 32, 32, 32)
+                  racine.fitsSystemWindows = true
+
+                  champIp = EditText(this)
+                  champIp.hint = "Adresse IP de l'émetteur (ex. 192.168.1.20)"
+                  champIp.setHintTextColor(Color.GRAY)
+                  champIp.setTextColor(Color.WHITE)
+                  champIp.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                  champIp.setText(prefs.getString("ip", ""))
+
+                  bouton = Button(this)
+                  bouton.text = "Se connecter"
+                  bouton.setOnClickListener {
+                      val ip = champIp.text.toString().trim()
+                      if (ip.isNotEmpty()) {
+                          prefs.edit().putString("ip", ip).apply()
+                          bouton.isEnabled = false
+                          connecter(ip)
+                      }
+                  }
+
+                  statut = TextView(this)
+                  statut.setTextColor(Color.LTGRAY)
+                  statut.textSize = 16f
+                  statut.text = "Non connecté"
+
+                  compteur = TextView(this)
+                  compteur.setTextColor(Color.WHITE)
+                  compteur.textSize = 140f
+                  compteur.gravity = Gravity.CENTER
+                  compteur.text = "0"
+                  compteur.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+
+                  racine.addView(champIp)
+                  racine.addView(bouton)
+                  racine.addView(statut)
+                  racine.addView(compteur)
+                  setContentView(racine)
+              }
+
+              private fun connecter(ip: String) {
+                  runOnUiThread { statut.text = "Connexion à $ip…" }
+                  Thread {
+                      var erreur: String? = null
+                      try {
+                          val s = Socket()
+                          s.connect(InetSocketAddress(ip, port), 5000)
+                          socket = s
+                          val sortie = PrintWriter(s.getOutputStream(), true)
+                          runOnUiThread { statut.text = "Connecté à $ip" }
+                          sortie.println("v:$valeur")
+                          val lecteur = BufferedReader(InputStreamReader(s.getInputStream()))
+                          while (true) {
+                              val ligne = lecteur.readLine() ?: break
+                              when (ligne) {
+                                  "+1" -> changer(1, sortie)
+                                  "-1" -> changer(-1, sortie)
+                              }
+                          }
+                      } catch (e: Exception) {
+                          erreur = e.message ?: "erreur inconnue"
+                      } finally {
+                          try { socket?.close() } catch (e: Exception) { }
+                          runOnUiThread {
+                              statut.text = if (erreur != null) "Échec : $erreur" else "Déconnecté"
+                              bouton.isEnabled = true
+                          }
+                      }
+                  }.start()
+              }
+
+              private fun changer(d: Int, sortie: PrintWriter) {
+                  valeur += d
+                  val v = valeur
+                  sortie.println("v:$v")
+                  runOnUiThread {
+                      compteur.text = v.toString()
+                      compteur.setTextColor(Color.parseColor(if (d > 0) "#2E9E4F" else "#C0392B"))
+                      compteur.postDelayed({ compteur.setTextColor(Color.WHITE) }, 200)
+                  }
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  try { socket?.close() } catch (e: Exception) { }
+              }
+          }
+          EOF_12
+
+      - name: Compiler l'emetteur
+        working-directory: emetteur
+        run: gradle assembleDebug --no-daemon
+
+      - name: Compiler le recepteur
+        working-directory: recepteur
+        run: gradle assembleDebug --no-daemon
+
+      - name: Publier les APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cp emetteur/app/build/outputs/apk/debug/app-debug.apk Emetteur.apk
+          cp recepteur/app/build/outputs/apk/debug/app-debug.apk Recepteur.apk
+          gh release delete apk --yes --cleanup-tag || true
+          gh release create apk Emetteur.apk Recepteur.apk --target "${{ github.sha }}" --title "APK" --notes "Emetteur.apk et Recepteur.apk"
