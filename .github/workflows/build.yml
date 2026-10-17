@@ -202,7 +202,7 @@ jobs:
                           serveur = ss
                           val adresses = adressesIp()
                           runOnUiThread {
-                              info.text = "Adresse à saisir sur le récepteur :\n$adresses\n(port $port)"
+                              info.text = "Adresse à saisir sur le récepteur :\n$adresses"
                           }
                           while (!ss.isClosed) {
                               val s = ss.accept()
@@ -246,7 +246,7 @@ jobs:
                           if (!ni.isUp || ni.isLoopback) continue
                           for (a in Collections.list(ni.inetAddresses)) {
                               if (a is Inet4Address && a.isSiteLocalAddress) {
-                                  liste.add(a.hostAddress ?: continue)
+                                  liste.add((a.hostAddress ?: continue) + ":" + port)
                               }
                           }
                       }
@@ -390,10 +390,10 @@ jobs:
                   racine.fitsSystemWindows = true
 
                   champIp = EditText(this)
-                  champIp.hint = "Adresse IP de l'émetteur (ex. 192.168.1.20)"
+                  champIp.hint = "Adresse de l'émetteur (ex. 192.168.1.20:8080)"
                   champIp.setHintTextColor(Color.GRAY)
                   champIp.setTextColor(Color.WHITE)
-                  champIp.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                  champIp.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
                   champIp.setText(prefs.getString("ip", ""))
 
                   bouton = Button(this)
@@ -426,16 +426,20 @@ jobs:
                   setContentView(racine)
               }
 
-              private fun connecter(ip: String) {
-                  runOnUiThread { statut.text = "Connexion à $ip…" }
+              private fun connecter(saisie: String) {
+                  // Accepte "192.168.1.20" (port 8080 par défaut) ou "192.168.1.20:8080"
+                  val morceaux = saisie.split(":")
+                  val ip = morceaux[0].trim()
+                  val portCible = morceaux.getOrNull(1)?.trim()?.toIntOrNull() ?: port
+                  runOnUiThread { statut.text = "Connexion à $ip:$portCible…" }
                   Thread {
                       var erreur: String? = null
                       try {
                           val s = Socket()
-                          s.connect(InetSocketAddress(ip, port), 5000)
+                          s.connect(InetSocketAddress(ip, portCible), 5000)
                           socket = s
                           val sortie = PrintWriter(s.getOutputStream(), true)
-                          runOnUiThread { statut.text = "Connecté à $ip" }
+                          runOnUiThread { statut.text = "Connecté à $ip:$portCible" }
                           sortie.println("v:$valeur")
                           val lecteur = BufferedReader(InputStreamReader(s.getInputStream()))
                           while (true) {
